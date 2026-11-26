@@ -15,7 +15,10 @@ import com.digitalku.roost.remote.net.SidebarRow
 import com.digitalku.roost.remote.net.parseEvent
 import com.digitalku.roost.remote.net.parseServerAddress
 import com.digitalku.roost.remote.net.wire
+import com.digitalku.roost.remote.net.Hello
+import com.digitalku.roost.remote.net.Received
 import com.digitalku.roost.remote.ui.suggestions
+import com.digitalku.roost.remote.upload.cleanName
 import java.net.InetAddress
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -23,7 +26,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -146,5 +151,76 @@ class ProtocolTest {
                 assertEquals("unknown_asset", e.code)
             }
         }
+    }
+
+    @Test
+    fun `hello says whether the server takes files, and a 1_0 server says nothing`() {
+        val old = wire.decodeFromString(Hello.serializer(), """{"api":1,"build":"0.2.10","library":null}""")
+        assertFalse(old.upload)
+        val new = wire.decodeFromString(
+            Hello.serializer(),
+            """{"api":1,"build":"0.3.0","library":null,"upload":true}""",
+        )
+        assertTrue(new.upload)
+    }
+
+    @Test
+    fun `a file goes as its bytes, its name and folder and date in the query`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().body(
+                """{"ok":true,"value":{"id":"A1B2C3D4E5F6","duplicateOf":null}}""",
+            ).build())
+            server.enqueue(MockResponse.Builder().body(
+                """{"ok":true,"value":{"id":null,"duplicateOf":"A1B2C3D4E5F6"}}""",
+            ).build())
+            server.start()
+            val session = Session(server.url("/"), "secret", OkHttpClient())
+            val bytes = "PICTURE".toByteArray()
+            val body = { bytes.toRequestBody("application/octet-stream".toMediaType()) }
+
+            val first = session.upload("pantai sore & ombak.jpg", 7, 1_700_000_000_000, body())
+            assertEquals(Received("A1B2C3D4E5F6", null), first)
+            val sent = server.takeRequest()
+            assertEquals("POST", sent.method)
+            assertEquals("/api/1/upload", sent.url.encodedPath)
+            assertEquals("pantai sore & ombak.jpg", sent.url.queryParameter("name"))
+            assertEquals("7", sent.url.queryParameter("folder"))
+            assertEquals("1700000000000", sent.url.queryParameter("modified"))
+            assertEquals("7", sent.headers["Content-Length"])
+            assertEquals("Bearer secret", sent.headers["Authorization"])
+            assertEquals("PICTURE", sent.body?.utf8())
+
+            val again = session.upload("lagi.jpg", null, null, body())
+            assertEquals(Received(null, "A1B2C3D4E5F6"), again)
+            val second = server.takeRequest()
+            assertNull(second.url.queryParameter("folder"))
+            assertNull(second.url.queryParameter("modified"))
+        }
+    }
+
+    @Test
+    fun `a file larger than the free space is refused by its code`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse.Builder().code(507).body(
+                """{"ok":false,"problem":{"code":"no_space","message":"full","detail":{}}}""",
+            ).build())
+            server.start()
+            try {
+                Session(server.url("/"), "t", OkHttpClient())
+                    .upload("big.mov", null, null, "X".toRequestBody())
+                fail("an upload refused for space was taken for an asset")
+            } catch (e: RemoteException) {
+                assertEquals(507, e.status)
+                assertEquals("no_space", e.code)
+            }
+        }
+    }
+
+    @Test
+    fun `a provider's name is made one the server takes`() {
+        assertEquals("a_b.jpg", cleanName("a/b.jpg"))
+        assertEquals("file", cleanName(".."))
+        assertEquals("file", cleanName("  "))
+        assertEquals("foto.jpg", cleanName("foto.jpg"))
     }
 }

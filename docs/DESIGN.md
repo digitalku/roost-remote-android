@@ -60,8 +60,51 @@ for as many rows as the grid holds, so it does not send the owner back to the to
 Edits are re-read, not drawn from what was sent, as in the window: the engine decides what a tag
 becomes.
 
-## 6. Not yet
+## 6. Adding files
+
+RR-15 to RR-17, from REMOTE.md revision 1.1 (ADR-0073 in Roost). The `+` button shows only when
+`hello` says `upload: true`.
+
+- **WorkManager, one batch per pick or share**, queued per library (`upload-<library id>`,
+  `APPEND_OR_REPLACE`), so batches go one after another and survive the app being closed. A batch
+  runs as a foreground service of type `dataSync`, with a notification that shows progress and
+  **Cancel**. Cancelling the work cancels the OkHttp call, which closes the connection, which is
+  how the server knows (RR-16).
+- **One file per request**, its bytes streamed from the `ContentResolver` (`ContentBody`), never
+  held. The length must be known first; a file whose provider says nothing of its size is not sent.
+  A dropped connection is retried from the start, three times. A refusal is not retried, and a 401
+  forgets the token and stops the batch (RR-7).
+- **A batch's answer never reuses a key of its question.** WorkManager hands one batch's output to
+  the next in the queue as input, and a shared key is overwritten: the first build put `folder` in
+  both, and every batch after the first went to the first batch's folder.
+- **A shared file is opened at once** (`Held`). A share's read grant belongs to the screen it was
+  handed to, which closes before the work starts, so the screen opens each file and leaves the open
+  descriptor in the process for the work to take. A process that dies first loses them, and the
+  notification says so.
+- **The system's file picker, not the Photo Picker**, for *Photos and videos* as for *Other files…*,
+  filtered to `image/*` and `video/*`. The Photo Picker answers `<media id>.<ext>` for
+  `DISPLAY_NAME`, so a photograph picked there arrived named `24`; a library is searched by name.
+  The file picker keeps the name and needs no storage permission either (the owner's choice,
+  2026-11-27).
+- The date sent is `DATE_TAKEN` where the media store knows it, the document's last modification
+  otherwise.
+
+## 7. Settings
+
+The gear on the list of libraries opens the app's own settings, kept in its private preferences
+(`store/Settings.kt`) and nowhere in a library. For now there is one: the theme, **Follow the
+system**, **Light** or **Dark**, the system's by default. Two things follow from it:
+
+- The system bars' icons follow the app's theme, not the system's (`enableEdgeToEdge` with the
+  style chosen), or a light app on a dark system draws white icons on white.
+- The manifest lists `uiMode` in `configChanges`, so a theme changed in the system's quick settings
+  recolours the screen in place rather than recreating the activity, which would close the library
+  on screen.
+
+The viewer is black in both themes.
+
+## 8. Not yet
 
 - Deleting for good. When it comes, RR-10's confirmation and preview come with it.
-- Comments, the library's own sort order, sharing a file out of the app, uploading.
+- Comments, the library's own sort order, sharing a file out of the app.
 - A release build signed for Google Play's internal testing.

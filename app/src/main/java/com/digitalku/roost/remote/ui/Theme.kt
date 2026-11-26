@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import com.digitalku.roost.remote.store.ThemeChoice
 
 /** The icon's two oranges, `#FFA43A` and `#E85606`, as the primary colour. */
 private val Dark = darkColorScheme(
@@ -24,7 +25,15 @@ private val Light = lightColorScheme(
     secondary = Color(0xFF765848),
 )
 
+/** Whether [choice] draws dark now: the system's answer when it is [ThemeChoice.System]. */
 @Composable
-fun RoostTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) Dark else Light, content = content)
+fun isDark(choice: ThemeChoice): Boolean = when (choice) {
+    ThemeChoice.System -> isSystemInDarkTheme()
+    ThemeChoice.Light -> false
+    ThemeChoice.Dark -> true
+}
+
+@Composable
+fun RoostTheme(dark: Boolean, content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = if (dark) Dark else Light, content = content)
 }

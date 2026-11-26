@@ -20,8 +20,15 @@ no library of its own: no index, no journal, no copies of files.
   streamed with `Range`.
 - Rating, tags (with suggestions from the library), folders, note, and the trash with Undo.
 - Stays current: the window's changes arrive over server-sent events.
+- Adds files to the library (ADR-0073 in Roost, REMOTE.md revision 1.1): the `+` button opens the
+  system's file picker, for photos and videos or for anything, and Roost Remote is under **Share** in other apps. The
+  files go to the folder on screen, one at a time, and keep going with the app closed, with a
+  notification and **Cancel**. A file the library already has is said, with *Add to folder*.
 
-Not yet: deleting for good, comments, uploading from the phone.
+- **Settings**, from the gear on the list of libraries: the theme, light, dark or as the system
+  says.
+
+Not yet: deleting for good, comments.
 
 ## Building
 

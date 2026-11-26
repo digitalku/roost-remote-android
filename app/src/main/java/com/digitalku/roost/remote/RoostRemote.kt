@@ -10,7 +10,9 @@ import com.digitalku.roost.remote.net.Bearer
 import com.digitalku.roost.remote.net.LocalOnly
 import com.digitalku.roost.remote.net.Session
 import com.digitalku.roost.remote.store.Libraries
+import com.digitalku.roost.remote.store.Settings
 import com.digitalku.roost.remote.store.Vault
+import com.digitalku.roost.remote.upload.Uploads
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 
@@ -27,6 +29,8 @@ class RoostRemote : Application(), SingletonImageLoader.Factory {
         private set
     lateinit var libraries: Libraries
         private set
+    lateinit var settings: Settings
+        private set
 
     /** The library on screen, or `null` on the list of libraries. */
     @Volatile
@@ -41,6 +45,8 @@ class RoostRemote : Application(), SingletonImageLoader.Factory {
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
         libraries = Libraries(this, Vault())
+        settings = Settings(this)
+        Uploads.channel(this)
     }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =

@@ -27,10 +27,20 @@ val wire = Json {
 }
 
 @Serializable
-data class Hello(val api: Int, val build: String, val library: HelloLibrary?)
+data class Hello(
+    val api: Int,
+    val build: String,
+    val library: HelloLibrary?,
+    /** RR-4, from revision 1.1: the server takes files (RR-15). Absent before. */
+    val upload: Boolean = false,
+)
 
 @Serializable
 data class HelloLibrary(val id: String, val name: String)
+
+/** RR-16: a new asset, or the one that already held the same bytes. */
+@Serializable
+data class Received(val id: String?, val duplicateOf: String?)
 
 @Serializable
 data class Paired(val token: String, val device: Device)

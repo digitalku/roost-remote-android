@@ -3,6 +3,7 @@ package com.digitalku.roost.remote.net
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.delay
@@ -26,6 +27,7 @@ import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.Request as HttpRequest
@@ -89,6 +91,15 @@ class Session(val base: HttpUrl, val token: String, private val http: OkHttpClie
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * After the last byte the server hashes and imports the file, and waits its
+     * turn behind any other being imported (RR-15): longer than a request's
+     * thirty seconds, for a video.
+     */
+    private val uploading = http.newBuilder()
+        .readTimeout(10, TimeUnit.MINUTES)
+        .build()
+
     /** Whether [url] is this server's, which is what decides who gets the token. */
     fun owns(url: HttpUrl): Boolean = url.host == base.host && url.port == base.port
 
@@ -99,12 +110,28 @@ class Session(val base: HttpUrl, val token: String, private val http: OkHttpClie
             .header("Authorization", "Bearer $token")
             .post(wire.encodeToString(Request.serializer(), request).toRequestBody(JSON))
             .build()
-        val outcome = wire.parseToJsonElement(execute(this.http, http)).jsonObject
-        if (outcome["ok"]?.jsonPrimitive?.booleanOrNull == true) {
-            return wire.decodeFromJsonElement(answer, outcome["value"] ?: JsonNull)
-        }
-        val problem = outcome["problem"] ?: throw IOException("an answer with neither value nor problem")
-        throw RemoteException(200, wire.decodeFromJsonElement(Problem.serializer(), problem))
+        return outcome(execute(this.http, http), answer)
+    }
+
+    /**
+     * RR-15: one file, [body] its bytes, which must know its length. Cancelling
+     * the coroutine closes the connection, which is how an upload is cancelled.
+     */
+    suspend fun upload(name: String, folder: Long?, modified: Long?, body: RequestBody): Received {
+        val url = base.newBuilder()
+            .addPathSegments("api/1/upload")
+            .addQueryParameter("name", name)
+            .apply {
+                if (folder != null) addQueryParameter("folder", folder.toString())
+                if (modified != null) addQueryParameter("modified", modified.toString())
+            }
+            .build()
+        val request = HttpRequest.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $token")
+            .post(body)
+            .build()
+        return outcome(execute(uploading, request), Received.serializer())
     }
 
     /** A request whose answer is `null`, which is what every edit answers. */
@@ -250,15 +277,34 @@ class Bearer(private val active: () -> Session?) : Interceptor {
     }
 }
 
+/** RR-8's `Outcome`: its value, or its problem thrown. */
+internal fun <T> outcome(text: String, answer: KSerializer<T>): T {
+    val outcome = wire.parseToJsonElement(text).jsonObject
+    if (outcome["ok"]?.jsonPrimitive?.booleanOrNull == true) {
+        return wire.decodeFromJsonElement(answer, outcome["value"] ?: JsonNull)
+    }
+    val problem = outcome["problem"] ?: throw IOException("an answer with neither value nor problem")
+    throw RemoteException(200, wire.decodeFromJsonElement(Problem.serializer(), problem))
+}
+
+/** The call is cancelled with the coroutine, so a cancelled upload stops sending. */
 private suspend fun execute(http: OkHttpClient, request: HttpRequest): String =
     withContext(Dispatchers.IO) {
-        http.newCall(request).execute().use { response ->
-            val text = response.body.string()
-            if (response.isSuccessful) return@use text
-            val problem = runCatching {
-                val body = wire.parseToJsonElement(text).jsonObject.getValue("problem")
-                wire.decodeFromJsonElement(Problem.serializer(), body)
-            }.getOrElse { Problem("http_${response.code}", "The server answered ${response.code}") }
-            throw RemoteException(response.code, problem)
+        val call = http.newCall(request)
+        val cancel = coroutineContext.job.invokeOnCompletion { if (it != null) call.cancel() }
+        try {
+            call.execute().use(::read)
+        } finally {
+            cancel.dispose()
         }
     }
+
+private fun read(response: Response): String {
+    val text = response.body.string()
+    if (response.isSuccessful) return text
+    val problem = runCatching {
+        val body = wire.parseToJsonElement(text).jsonObject.getValue("problem")
+        wire.decodeFromJsonElement(Problem.serializer(), body)
+    }.getOrElse { Problem("http_${response.code}", "The server answered ${response.code}") }
+    throw RemoteException(response.code, problem)
+}

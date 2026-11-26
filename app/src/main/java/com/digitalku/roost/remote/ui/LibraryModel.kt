@@ -5,7 +5,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import android.net.Uri
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.digitalku.roost.remote.RoostRemote
+import com.digitalku.roost.remote.net.AddToFolder
 import com.digitalku.roost.remote.net.AssetCard
 import com.digitalku.roost.remote.net.AssetDetail
 import com.digitalku.roost.remote.net.AssetPage
@@ -18,11 +22,13 @@ import com.digitalku.roost.remote.net.ReadSidebar
 import com.digitalku.roost.remote.net.RemoteException
 import com.digitalku.roost.remote.net.Request
 import com.digitalku.roost.remote.net.Restore
+import com.digitalku.roost.remote.net.Server
 import com.digitalku.roost.remote.net.ServerEvent
 import com.digitalku.roost.remote.net.Session
 import com.digitalku.roost.remote.net.Sidebar
 import com.digitalku.roost.remote.net.Trash
 import com.digitalku.roost.remote.store.SavedLibrary
+import com.digitalku.roost.remote.upload.Uploads
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +49,9 @@ private const val MAX_PAGE = 10_000
 
 /** How the connection to the library stands, for the banner over the grid. */
 enum class Link { Connecting, Live, Offline, Lost, Unpaired }
+
+/** The file being sent now, for the line over the grid. */
+data class Sending(val index: Int, val count: Int, val name: String, val fraction: Float)
 
 /** Something to say in the snackbar, with one action at most. */
 data class Notice(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null)
@@ -75,6 +84,18 @@ class LibraryModel(
 
     /** The query on screen, RQL as the window's search field holds it. */
     var query by mutableStateOf("")
+        private set
+
+    /** The folder on screen, which a file sent from here joins (ADR-0037 §7). */
+    var folder by mutableStateOf<Long?>(null)
+        private set
+
+    /** The server takes files (RR-4, revision 1.1). */
+    var canUpload by mutableStateOf(false)
+        private set
+
+    /** The file on its way now, or `null` when nothing is being sent. */
+    var sending by mutableStateOf<Sending?>(null)
         private set
 
     /** What the title says: the row that was chosen, or the query typed. */
@@ -113,6 +134,7 @@ class LibraryModel(
     init {
         app.session = session
         scope.launch { session.events().collect(::on) }
+        scope.launch { watchUploads() }
     }
 
     fun close() {
@@ -121,9 +143,10 @@ class LibraryModel(
     }
 
     /** A row of the navigation pane, or a query typed into the search field. */
-    fun show(query: String, title: String) {
+    fun show(query: String, title: String, folder: Long? = null) {
         this.query = query
         this.title = title
+        this.folder = folder
         cards = emptyList()
         count = null
         reload(keep = 0)
@@ -207,6 +230,66 @@ class LibraryModel(
         }
     }
 
+    /** Files picked here, sent to the folder on screen (ADR-0073). */
+    fun upload(uris: List<Uri>) {
+        Uploads.send(app, saved, folder, uris)
+    }
+
+    /**
+     * The library's queue of batches: the one running draws the line over the
+     * grid, and one that finishes says what happened. Those already finished
+     * when the screen opened were said by their notification.
+     */
+    private suspend fun watchUploads() {
+        val seen = mutableSetOf<java.util.UUID>()
+        var first = true
+        WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(Uploads.queue(saved.libraryId)).collect { infos ->
+            val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+            sending = running?.progress?.let { data ->
+                val count = data.getInt(Uploads.COUNT, 0)
+                if (count == 0) return@let null
+                val total = data.getLong(Uploads.BYTES_TOTAL, 0)
+                Sending(
+                    index = data.getInt(Uploads.INDEX, 0),
+                    count = count,
+                    name = data.getString(Uploads.NAME).orEmpty(),
+                    fraction = if (total > 0) data.getLong(Uploads.BYTES_SENT, 0).toFloat() / total else 0f,
+                )
+            } ?: if (running != null) Sending(0, 0, "", 0f) else null
+            for (info in infos.filter { it.state.isFinished }) {
+                if (!seen.add(info.id) || first) continue
+                finished(info)
+            }
+            first = false
+        }
+    }
+
+    private fun finished(info: WorkInfo) {
+        val data = info.outputData
+        if (info.state == WorkInfo.State.FAILED) {
+            notice = Notice(data.getString(Uploads.PROBLEM) ?: "The files could not be sent.")
+            return
+        }
+        if (info.state != WorkInfo.State.SUCCEEDED) return
+        val sent = data.getInt(Uploads.SENT, 0)
+        val duplicates = data.getStringArray(Uploads.DUPLICATES).orEmpty().toList()
+        val failed = data.getInt(Uploads.FAILED, 0)
+        val folder = data.getLong(Uploads.FILED_IN, 0L).takeIf { it > 0 }
+        val text = buildList {
+            if (sent > 0) add(if (sent == 1) "1 file sent" else "$sent files sent")
+            if (duplicates.isNotEmpty()) {
+                add(if (duplicates.size == 1) "1 already in the library" else "${duplicates.size} already in the library")
+            }
+            if (failed > 0) add(if (failed == 1) "1 could not be sent" else "$failed could not be sent")
+        }.joinToString(" · ").ifEmpty { return }
+        // ADR-0037 §3's offer: what was already here can join the folder too.
+        notice = if (duplicates.isNotEmpty() && folder != null) {
+            Notice(text, "Add to folder") { edit(AddToFolder(duplicates, folder), "Added to the folder") }
+        } else {
+            Notice(data.getString(Uploads.PROBLEM)?.takeIf { failed > 0 }?.let { "$text. $it" } ?: text)
+        }
+    }
+
     private fun on(event: ServerEvent) {
         when (event) {
             // RR-12: what was sent while the stream was down is not repeated.
@@ -252,6 +335,9 @@ class LibraryModel(
     private fun refresh() {
         stale()
         reload(keep = cards.size)
+        scope.launch {
+            canUpload = runCatching { Server(session.base, app.http).hello().upload }.getOrDefault(false)
+        }
         scope.launch {
             try {
                 sidebar = session.ask(ReadSidebar, Sidebar.serializer())

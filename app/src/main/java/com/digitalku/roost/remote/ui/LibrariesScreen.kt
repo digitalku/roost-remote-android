@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -43,12 +44,22 @@ fun LibrariesScreen(
     onOpen: (SavedLibrary) -> Unit,
     onAdd: () -> Unit,
     onChangeAddress: (SavedLibrary) -> Unit,
+    onSettings: () -> Unit,
 ) {
     val all by libraries.all.collectAsState()
     var forgetting by remember { mutableStateOf<SavedLibrary?>(null) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Roost Remote") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Roost Remote") },
+                actions = {
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = onAdd,

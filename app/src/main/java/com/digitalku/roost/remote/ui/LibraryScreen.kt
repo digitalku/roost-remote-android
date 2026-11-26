@@ -1,6 +1,11 @@
 package com.digitalku.roost.remote.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayCircle
@@ -30,7 +36,10 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,10 +74,12 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import com.digitalku.roost.remote.net.AssetCard
 import com.digitalku.roost.remote.net.Session
@@ -96,11 +107,33 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
     var searching by remember { mutableStateOf(false) }
     var typed by remember { mutableStateOf("") }
 
+    // ADR-0073 §3.8, amended: the system's file picker for both, pictures and
+    // videos filtered. The Photo Picker answers a media id for a file's name, so
+    // a photograph arrived named `24`; the file picker keeps the name, and needs
+    // no storage permission either.
+    val context = LocalContext.current
+    val asked = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val send = { uris: List<android.net.Uri> ->
+        if (uris.isNotEmpty()) {
+            // Asked once, as files are first sent: without it the progress is
+            // still there, only not in the notification shade.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                asked.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            model.upload(uris)
+        }
+    }
+    val documents = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments(), send)
+    var adding by remember { mutableStateOf(false) }
+
     BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
     BackHandler(enabled = searching && viewing == null) { searching = false }
 
-    val show = { query: String, title: String ->
-        model.show(query, title)
+    val show = { query: String, title: String, folder: Long? ->
+        model.show(query, title, folder)
         scope.launch { grid.scrollToItem(0) }
         Unit
     }
@@ -140,12 +173,37 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
             drawerContent = {
                 Pane(model.name, model.address, model.sidebar, model.query) { row ->
                     searching = false
-                    show(row.query, row.name)
+                    show(row.query, row.name, row.folder)
                     scope.launch { drawer.close() }
                 }
             },
         ) {
             Scaffold(
+                floatingActionButton = {
+                    if (model.canUpload && model.link == Link.Live) {
+                        Box {
+                            FloatingActionButton(onClick = { adding = true }) {
+                                Icon(Icons.Filled.Add, contentDescription = "Add files")
+                            }
+                            DropdownMenu(expanded = adding, onDismissRequest = { adding = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Photos and videos") },
+                                    onClick = {
+                                        adding = false
+                                        documents.launch(arrayOf("image/*", "video/*"))
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Other files…") },
+                                    onClick = {
+                                        adding = false
+                                        documents.launch(arrayOf("*/*"))
+                                    },
+                                )
+                            }
+                        }
+                    }
+                },
                 topBar = {
                     TopAppBar(
                         navigationIcon = {
@@ -157,7 +215,7 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
                             if (searching) {
                                 SearchField(typed, { typed = it }) {
                                     val query = typed.trim()
-                                    show(query, query.ifEmpty { "All assets" })
+                                    show(query, query.ifEmpty { "All assets" }, null)
                                 }
                             } else {
                                 Column {
@@ -188,6 +246,7 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
             ) { padding ->
                 Column(Modifier.padding(padding).fillMaxSize()) {
                     Banner(model, onBack)
+                    model.sending?.let { SendingLine(it) }
                     model.problem?.let {
                         Text(
                             it,
@@ -286,6 +345,29 @@ private fun SearchField(value: String, onChange: (String) -> Unit, onSearch: () 
         modifier = Modifier.fillMaxWidth().focusRequester(focus),
     )
     LaunchedEffect(Unit) { focus.requestFocus() }
+}
+
+/** The file on its way, over the grid, while a batch is being sent. */
+@Composable
+private fun SendingLine(sending: Sending) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Text(
+            when (sending.count) {
+                0 -> "Sending…"
+                1 -> "Sending ${sending.name}"
+                else -> "Sending ${sending.index + 1} of ${sending.count} · ${sending.name}"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (sending.count == 0) {
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
+        } else {
+            LinearProgressIndicator(progress = { sending.fraction }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+        }
+    }
 }
 
 /** How the connection stands, said once above the grid. */
