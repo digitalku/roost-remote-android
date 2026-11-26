@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Plain HTTP is the protocol's own choice (REMOTE.md RR-3, ADR-0072 §3.4), and the
+  addresses are typed by the owner at run time, so no list of hosts can be written
+  here. Cleartext is therefore allowed in the configuration and refused in code:
+  LocalAddress refuses any server whose address is not on a local network before
+  a single byte is sent to it. docs/DESIGN.md §3.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
