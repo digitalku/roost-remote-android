@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon's front layer, and its monochrome layer: the bird of
+  assets/brand/roost-icon.svg in the roost repository, in that file's coordinates.
+  The wing and the eye are holes (evenOdd) rather than shapes painted in the
+  gradient, so the back layer shows through them, and a themed icon keeps them.
+  Scaled to 0.66 about the centre, which puts the tail's tip, the point farthest
+  from the centre, 32.4dp out: inside the 33dp circle no launcher's mask cuts.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <group
+        android:scaleX="0.66"
+        android:scaleY="0.66"
+        android:translateX="87.04"
+        android:translateY="87.04">
+        <path android:fillColor="#FFFFF7F0" android:pathData="M125,396 H391 A13,13 0 0 1 391,422 H125 A13,13 0 0 1 125,396 Z" />
+        <path android:strokeColor="#FFFFF7F0" android:strokeWidth="15" android:strokeLineCap="round" android:pathData="M214,340 L214,402 M272,340 L272,402" />
+        <path android:fillColor="#FFFFF7F0" android:fillType="evenOdd" android:pathData="M138,250 C138,214 152,192 172,186 C214,168 274,174 320,196 C370,186 420,168 458,140 C428,226 372,286 296,306 C288,332 268,350 240,350 C186,350 138,306 138,250 Z M186,258 C244,240 300,224 344,196 C322,278 258,318 196,300 Z" />
+        <path android:fillColor="#FFFFF7F0" android:fillType="evenOdd" android:pathData="M118,152 A52,52 0 1 0 222,152 A52,52 0 1 0 118,152 Z M177,142 A11,11 0 1 0 199,142 A11,11 0 1 0 177,142 Z" />
+        <path android:fillColor="#FFFFF7F0" android:pathData="M100,157 L135,132 L135,180 Z" />
+    </group>
+</vector>

@@ -29,4 +29,10 @@
   file added to a folder. `docs/RELEASING.md`, `PRIVACY.md`.
 - [ ] The first upload to internal testing: the owner's upload key, the store listing, the
   privacy policy's URL, and the foreground service's video (`docs/RELEASING.md` §3).
+- [x] A foldable opened or closed, or a window resized, kept the app where it was (2026-11-27):
+  `smallestScreenSize` and `density` were missing from `configChanges`, so the activity was
+  recreated and the app went back to the list. Tried on the emulator at 2208×1840 and back.
+- [x] An adaptive launcher icon (2026-11-27): the gradient behind, the bird in front with the wing
+  and eye as holes, and the same bird as the monochrome layer; tried in the emulator's drawer.
+  `play/icon-512.png` is the square Play Store icon, rendered from `play/icon.svg`.
 - [ ] An adaptive launcher icon.

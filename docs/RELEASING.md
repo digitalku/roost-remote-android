@@ -71,8 +71,9 @@ file. A class R8 removed shows up only there.
   its progress.
 - *Government apps, financial features, health*: no.
 
-**Store listing**: name *Roost Remote*, a short and a full description, the icon at 512×512, a
-feature graphic at 1024×500, and at least two phone screenshots.
+**Store listing**: name *Roost Remote*, a short and a full description, the icon at 512×512
+(`play/icon-512.png`, square, because Play rounds the corners itself), a feature graphic at
+1024×500, and at least two phone screenshots.
 
 ## 4. Internal testing
 
