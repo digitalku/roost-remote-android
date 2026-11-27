@@ -23,5 +23,10 @@
 - [ ] The library's remembered order (`settings:read`), instead of the default.
 - [ ] Comments in the detail sheet (`comment:add`, `comment:set`, `comment:remove`).
 - [ ] Deleting for good, with RR-10's confirmation and preview.
-- [ ] Release signing and an `.aab` for Google Play internal testing.
+- [x] Release signing and an `.aab` for Google Play internal testing (2026-11-27): the upload key
+  is read from `~/.gradle/gradle.properties`, and the minified release, signed with the debug key,
+  was tried on the emulator: pairing again after a 401, the grid, a picture, the drawer, and a
+  file added to a folder. `docs/RELEASING.md`, `PRIVACY.md`.
+- [ ] The first upload to internal testing: the owner's upload key, the store listing, the
+  privacy policy's URL, and the foreground service's video (`docs/RELEASING.md` §3).
 - [ ] An adaptive launcher icon.

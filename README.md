@@ -39,6 +39,9 @@ JDK 21 and the Android SDK (platform 36). See `docs/SETUP.md`.
 ./gradlew testDebugUnitTest
 ```
 
+A release for Google Play is `docs/RELEASING.md`: the upload key, which stays outside the
+repository, the bundle, and what Play Console asks. The privacy policy is `PRIVACY.md`.
+
 ## Licence
 
 MIT © Digitalku. See `LICENSE`.

@@ -19,8 +19,24 @@ android {
         versionName = "0.1.0"
     }
 
+    // The upload key is the owner's and never in this repository. Its path and passwords come
+    // from ~/.gradle/gradle.properties; without them a release builds unsigned, which Play refuses
+    // and which is all a build for anybody else needs (README, "Releasing").
+    val uploadStore = providers.gradleProperty("roostRemoteUploadStoreFile").orNull
+    if (uploadStore != null) {
+        signingConfigs {
+            create("upload") {
+                storeFile = file(uploadStore)
+                storePassword = providers.gradleProperty("roostRemoteUploadStorePassword").get()
+                keyAlias = providers.gradleProperty("roostRemoteUploadKeyAlias").get()
+                keyPassword = providers.gradleProperty("roostRemoteUploadKeyPassword").get()
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (uploadStore != null) signingConfig = signingConfigs.getByName("upload")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
