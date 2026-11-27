@@ -18,6 +18,15 @@
 - [ ] A large video over real Wi-Fi: the notification, Cancel part-way, and the screen locked.
 - [ ] Video and audio on a real file: playback, and whether the pager still swipes over a
       `PlayerView`, which takes the touch.
+- [x] Seeking a video (2026-11-27, the owner's report from a phone): the pager took the drag on
+      `PlayerView`'s seek bar. A transport drawn in Compose, tried on the emulator with a minute of
+      `testsrc`: dragged to 0:43, and a swipe over the picture still moved to the next file.
+- [x] A tag or folder chip goes there or comes off, through a menu; tags are picked from a
+      searchable list or made; the folder picker is searchable; the drawer finds folders and tags;
+      folders are drawn in the grid, inside a folder and when a search names them (2026-11-27).
+      Tried on the emulator. Found there: a grid key that was not a `Bundle` type crashed the app
+      the moment a tile was drawn, the drawer's field raised the keyboard at every open, and the
+      search field put the caret before a folder's query.
 - [ ] Pinch zoom on a real photograph, and a HEIC or RAW through `/bytes/render/`.
 - [ ] A real phone over Wi-Fi and over Tailscale.
 - [ ] The library's remembered order (`settings:read`), instead of the default.
@@ -35,4 +44,20 @@
 - [x] An adaptive launcher icon (2026-11-27): the gradient behind, the bird in front with the wing
   and eye as holes, and the same bird as the monochrome layer; tried in the emulator's drawer.
   `play/icon-512.png` is the square Play Store icon, rendered from `play/icon.svg`.
-- [ ] An adaptive launcher icon.
+
+## The window's features, still to bring
+
+The owner asked on 2026-11-27 for as much of the window as a phone can carry. In rough order:
+
+- [ ] Selecting several files in the grid, and tagging, filing, rating or trashing them together.
+- [x] The filter bar: tags (Any or All), rating and type over the grid (ADR-0035), 2026-11-27.
+      Tried on the emulator: two tags gave 18 under Any and 2 under All, the query read
+      `tag:keluarga tag:pantai`, the ticks stood when a folder was opened, MP4 alone gave the video,
+      and Clear gave back all 61.
+- [ ] The library's own order and the sort menu (`settings:read`, ADR-0039).
+- [ ] Show subfolder contents, with the *In subfolders* divider (ADR-0036, ADR-0059).
+- [ ] Making, renaming, moving and deleting folders (ADR-0033, ADR-0067).
+- [ ] The tags page: groups, rename, merge and delete (ADR-0061).
+- [ ] Comments in the detail sheet, at a moment of a video too (ADR-0023).
+- [ ] Deleting for good, with RR-10's confirmation and preview.
+- [ ] Markdown and text files read in the viewer (`asset:readText`, ADR-0070).

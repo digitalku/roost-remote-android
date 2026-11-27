@@ -16,12 +16,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
@@ -30,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Search
@@ -48,6 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -72,11 +76,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -137,6 +144,12 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
         scope.launch { grid.scrollToItem(0) }
         Unit
     }
+    // A place, with the filter bar's ticks left standing (ADR-0035).
+    val go = { place: String, title: String, folder: Long? ->
+        model.go(place, title, folder)
+        scope.launch { grid.scrollToItem(0) }
+        Unit
+    }
 
     model.notice?.let { notice ->
         LaunchedEffect(notice) {
@@ -166,6 +179,11 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
             .collect { (_, ids) -> model.drawOnScreen(ids) }
     }
 
+    val tiles = model.tiles
+    LaunchedEffect(tiles.map { it.id }, model.detailVersion) {
+        model.wantCovers(tiles.mapNotNull { it.folder })
+    }
+
     Box(Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawer,
@@ -173,7 +191,7 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
             drawerContent = {
                 Pane(model.name, model.address, model.sidebar, model.query) { row ->
                     searching = false
-                    show(row.query, row.name, row.folder)
+                    go(row.query, row.name, row.folder)
                     scope.launch { drawer.close() }
                 }
             },
@@ -246,6 +264,7 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
             ) { padding ->
                 Column(Modifier.padding(padding).fillMaxSize()) {
                     Banner(model, onBack)
+                    if (model.link == Link.Live || model.split != null) FilterBar(model)
                     model.sending?.let { SendingLine(it) }
                     model.problem?.let {
                         Text(
@@ -263,11 +282,20 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                             modifier = Modifier.fillMaxSize(),
                         ) {
+                            // A folder id, a number, where an asset's is a string:
+                            // a key has to fit in a Bundle, and drawOnScreen takes
+                            // the strings alone.
+                            gridItems(tiles, key = { row -> row.folder ?: row.id.hashCode().toLong() }) { row ->
+                                FolderTile(row, model.covers[row.folder], where = model.folder == null) {
+                                    searching = false
+                                    go(row.query, row.name, row.folder)
+                                }
+                            }
                             itemsIndexed(model.cards, key = { _, card -> card.id }) { index, card ->
                                 Cell(card, model.session) { viewing = index }
                             }
                         }
-                        if (model.cards.isEmpty()) {
+                        if (model.cards.isEmpty() && tiles.isEmpty()) {
                             if (model.loading) {
                                 CircularProgressIndicator(Modifier.align(Alignment.Center))
                             } else if (model.problem == null && model.link == Link.Live) {
@@ -284,10 +312,20 @@ fun LibraryScreen(model: LibraryModel, onBack: () -> Unit, onPairAgain: () -> Un
         }
 
         viewing?.let { start ->
-            AssetViewer(model, start) { last ->
+            AssetViewer(
+                model,
+                start,
+                onGo = { row ->
+                    viewing = null
+                    searching = false
+                    go(row.query, row.name, row.folder)
+                },
+            ) { last ->
                 viewing = null
+                // The grid's items are the tiles and then the cards.
+                val item = last + tiles.size
                 val visible = grid.layoutInfo.visibleItemsInfo.map { it.index }
-                if (last !in visible) scope.launch { grid.scrollToItem(last) }
+                if (item !in visible) scope.launch { grid.scrollToItem(item) }
             }
         }
 
@@ -328,9 +366,15 @@ private fun subtitle(name: String, count: Long?): String = when (count) {
 private fun SearchField(value: String, onChange: (String) -> Unit, onSearch: () -> Unit) {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    // The caret at the end: opened over a folder, the field holds its query,
+    // and a word typed at the start ran into it (`balinfolder:Liburan`).
+    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     TextField(
-        value = value,
-        onValueChange = onChange,
+        value = field,
+        onValueChange = {
+            field = it
+            onChange(it.text)
+        },
         singleLine = true,
         placeholder = { Text("Search, or tag:name") },
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -438,23 +482,76 @@ private fun Pane(
     query: String,
     onPick: (SidebarRow) -> Unit,
 ) {
+    var needle by remember { mutableStateOf("") }
+    // Behind a magnifier, as the window's folder search is (ADR-0033 §6): the
+    // drawer moves the focus to its first control as it opens, and a field
+    // there raised the keyboard every time the drawer was opened.
+    var finding by remember { mutableStateOf(false) }
     ModalDrawerSheet {
-        LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.imePadding(), contentPadding = PaddingValues(bottom = 16.dp)) {
             item {
-                Column(Modifier.padding(horizontal = 28.dp, vertical = 16.dp)) {
-                    Text(name, style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        address,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                Row(
+                    Modifier.padding(start = 28.dp, end = 12.dp, top = 16.dp, bottom = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(name, style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            address,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (sidebar != null && !finding) {
+                        IconButton(onClick = { finding = true }) {
+                            Icon(Icons.Filled.Search, contentDescription = "Find a folder or tag")
+                        }
+                    }
                 }
             }
             if (sidebar == null) return@LazyColumn
-            items(sidebar.places, key = { "place:${it.id}" }) { PaneRow(it, query, onPick) }
-            section("Folders", sidebar.folders, query, onPick)
-            section("Smart folders", sidebar.smartFolders, query, onPick)
-            section("Tags", sidebar.tags, query, onPick)
+            if (finding) item(key = "find") {
+                val focus = remember { FocusRequester() }
+                LaunchedEffect(Unit) { focus.requestFocus() }
+                OutlinedTextField(
+                    value = needle,
+                    onValueChange = { needle = it },
+                    placeholder = { Text("Find a folder or tag") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            needle = ""
+                            finding = false
+                        }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close the search")
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 8.dp)
+                        .focusRequester(focus),
+                )
+            }
+            val words = wordsOf(needle)
+            val folders = treeMatching(sidebar.folders, needle)
+            val smart = sidebar.smartFolders.filter { matches(it.name, words) }
+            val tags = sidebar.tags.filter { matches(it.name, words) }
+            if (words.isEmpty()) {
+                items(sidebar.places, key = { "place:${it.id}" }) { PaneRow(it, query, onPick) }
+            } else if (folders.isEmpty() && smart.isEmpty() && tags.isEmpty()) {
+                item(key = "none") {
+                    Text(
+                        "No folder or tag is called that.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp),
+                    )
+                }
+            }
+            section("Folders", folders, query, onPick)
+            section("Smart folders", smart, query, onPick)
+            section("Tags", tags, query, onPick)
         }
     }
 }
@@ -487,4 +584,73 @@ private fun PaneRow(row: SidebarRow, query: String, onPick: (SidebarRow) -> Unit
         badge = { row.count?.let { Text("%,d".format(it)) } },
         modifier = Modifier.padding(start = 12.dp + (row.depth * 16).dp, end = 12.dp),
     )
+}
+
+/**
+ * A folder among the thumbnails (ADR-0043): its newest pictures, four at most,
+ * under its name. A tap opens it. Where a search found it, the folder it sits in
+ * is said too, because names repeat (ADR-0057).
+ */
+@Composable
+private fun FolderTile(row: SidebarRow, covers: List<String>?, where: Boolean, onOpen: () -> Unit) {
+    Box(
+        Modifier
+            .aspectRatio(1f)
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable(onClick = onOpen),
+    ) {
+        val pictures = covers.orEmpty().take(4)
+        if (pictures.isEmpty()) {
+            Icon(
+                Icons.Filled.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.align(Alignment.Center).size(48.dp),
+            )
+        } else {
+            Column(Modifier.matchParentSize(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                for (line in pictures.chunked(2)) {
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                        for (url in line) {
+                            AsyncImage(
+                                model = url,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.weight(1f).fillMaxSize(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Folder, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                Text(
+                    row.name,
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 4.dp),
+                )
+            }
+            val parent = row.path?.substringBeforeLast('/', "")
+            if (where && !parent.isNullOrEmpty()) {
+                Text(
+                    "in $parent",
+                    color = Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }

@@ -17,7 +17,10 @@ import com.digitalku.roost.remote.net.parseServerAddress
 import com.digitalku.roost.remote.net.wire
 import com.digitalku.roost.remote.net.Hello
 import com.digitalku.roost.remote.net.Received
-import com.digitalku.roost.remote.ui.suggestions
+import com.digitalku.roost.remote.ui.childrenOf
+import com.digitalku.roost.remote.ui.facetTags
+import com.digitalku.roost.remote.ui.pickable
+import com.digitalku.roost.remote.ui.treeMatching
 import com.digitalku.roost.remote.upload.cleanName
 import java.net.InetAddress
 import kotlinx.coroutines.runBlocking
@@ -102,12 +105,46 @@ class ProtocolTest {
     }
 
     @Test
-    fun `a tag is offered from the start of a word, commonest first`() {
+    fun `a tag picker offers every tag before a letter, then those a word starts`() {
         fun row(name: String, count: Long) = SidebarRow(name, name, "tag:$name", count, 0, null, null)
-        val tags = listOf(row("olahraga", 3), row("sepak-bola", 9), row("bola", 1), row("laut", 4))
-        assertEquals(listOf("sepak-bola", "bola"), suggestions(tags, emptyList(), "bol"))
-        assertEquals(listOf("bola"), suggestions(tags, listOf("Sepak-Bola"), "bol"))
-        assertEquals(emptyList<String>(), suggestions(tags, emptyList(), " "))
+        val tags = listOf(row("olahraga", 3), row("sepak-bola", 9), row("bola", 1), row("Café", 4))
+        fun names(has: List<String>, typed: String) = pickable(tags, has, typed).map { it.name }
+        assertEquals(listOf("olahraga", "sepak-bola", "bola", "Café"), names(emptyList(), " "))
+        assertEquals(listOf("sepak-bola", "bola"), names(emptyList(), "bol"))
+        assertEquals(listOf("bola"), names(listOf("Sepak-Bola"), "bol"))
+        assertEquals(listOf("Café"), names(emptyList(), "cafe"))
+        assertEquals(emptyList<String>(), names(emptyList(), "raga"))
+    }
+
+    @Test
+    fun `the tags sheet puts what is ticked first, offered or not`() {
+        fun row(name: String, count: Long) = SidebarRow(name, name, "tag:$name", count, 0, null, null)
+        val offered = listOf(row("laut", 4), row("pantai", 12), row("liburan", 12))
+        assertEquals(
+            listOf("pantai" to 12L, "gone" to null, "laut" to 4L, "liburan" to 12L),
+            facetTags(offered, listOf("pantai", "gone"), ""),
+        )
+        assertEquals(listOf("pantai" to 12L, "laut" to 4L), facetTags(offered, listOf("pantai"), "la"))
+    }
+
+    @Test
+    fun `a folder search keeps the tree's shape`() {
+        fun row(name: String, depth: Int, id: Long) =
+            SidebarRow("f$id", name, "infolder:$name", null, depth, null, null, id, name)
+        val tree = listOf(
+            row("Travel", 0, 1),
+            row("Bali", 1, 2),
+            row("Beach", 2, 3),
+            row("Lombok", 1, 4),
+            row("Work", 0, 5),
+            row("Beach shoot", 1, 6),
+        )
+        assertEquals(listOf("Travel", "Bali", "Beach", "Work", "Beach shoot"), treeMatching(tree, "bea").map { it.name })
+        // A match's own subtree is left out unless it matches too.
+        assertEquals(listOf("Travel", "Bali"), treeMatching(tree, "bali").map { it.name })
+        assertEquals(tree, treeMatching(tree, ""))
+        assertEquals(listOf("Bali", "Lombok"), childrenOf(tree, 1).map { it.name })
+        assertEquals(emptyList<SidebarRow>(), childrenOf(tree, 3))
     }
 
     @Test

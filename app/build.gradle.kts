@@ -15,8 +15,8 @@ android {
         applicationId = "com.digitalku.roost.remote"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.2.0"
     }
 
     // The upload key is the owner's and never in this repository. Its path and passwords come

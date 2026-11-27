@@ -16,6 +16,15 @@ import com.digitalku.roost.remote.net.AssetPage
 import com.digitalku.roost.remote.net.CountAssets
 import com.digitalku.roost.remote.net.Cursor
 import com.digitalku.roost.remote.net.DrawOnScreen
+import com.digitalku.roost.remote.net.FacetVocabulary
+import com.digitalku.roost.remote.net.Facets
+import com.digitalku.roost.remote.net.JoinQuery
+import com.digitalku.roost.remote.net.ReadVocabulary
+import com.digitalku.roost.remote.net.SplitQuery
+import com.digitalku.roost.remote.net.SplitRequest
+import com.digitalku.roost.remote.net.FindFolders
+import com.digitalku.roost.remote.net.FolderCover
+import com.digitalku.roost.remote.net.ReadCovers
 import com.digitalku.roost.remote.net.ReadDetail
 import com.digitalku.roost.remote.net.ReadPage
 import com.digitalku.roost.remote.net.ReadSidebar
@@ -26,6 +35,7 @@ import com.digitalku.roost.remote.net.Server
 import com.digitalku.roost.remote.net.ServerEvent
 import com.digitalku.roost.remote.net.Session
 import com.digitalku.roost.remote.net.Sidebar
+import com.digitalku.roost.remote.net.SidebarRow
 import com.digitalku.roost.remote.net.Trash
 import com.digitalku.roost.remote.store.SavedLibrary
 import com.digitalku.roost.remote.upload.Uploads
@@ -37,6 +47,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.nullable
 import kotlinx.serialization.builtins.serializer
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -122,6 +133,46 @@ class LibraryModel(
     /** The [detailVersion] each detail was read at. */
     private val readAt = mutableMapOf<String, Int>()
 
+    /** The query on screen parted into place and facets, or `null` before it is read. */
+    var split by mutableStateOf<SplitQuery?>(null)
+        private set
+
+    /**
+     * The tag rule chosen, which a query of fewer than two tags cannot say, so
+     * the app remembers it as the window does (ADR-0035 §7.2).
+     */
+    private var tagRule = "any"
+    private var filtering: Job? = null
+
+    /** What the filter bar shows ticked. */
+    val facets: Facets
+        get() {
+            val read = split?.takeIf { it.representable }?.facets ?: return Facets.NONE.copy(tagRule = tagRule)
+            return if (read.tags.size < 2) read.copy(tagRule = tagRule) else read
+        }
+
+    /** The folders a typed search found by name (ADR-0057), or `null`. */
+    private var found by mutableStateOf<List<Long>?>(null)
+
+    /**
+     * The folders drawn as tiles ahead of the assets: those inside the folder on
+     * screen (ADR-0043), or those a typed search found by name (ADR-0057), in
+     * the pane's order. A tile is a place to go, not a result.
+     */
+    val tiles: List<SidebarRow>
+        get() {
+            val rows = sidebar?.folders ?: return emptyList()
+            // A narrowed folder draws no tiles, as in the window (ADR-0043): its
+            // subfolders hold what the filters were not asked about.
+            folder?.let { return if (facets.active) emptyList() else childrenOf(rows, it) }
+            val ids = found?.toSet() ?: return emptyList()
+            return rows.filter { it.folder in ids }
+        }
+
+    /** Each tile's pictures, as thumbnail addresses, by folder id. */
+    val covers = mutableStateMapOf<Long, List<String>>()
+    private val coversReadAt = mutableMapOf<Long, Int>()
+
     /** Moves whenever a detail may be stale, so a viewer reads it again. */
     var detailVersion by mutableIntStateOf(0)
         private set
@@ -147,10 +198,54 @@ class LibraryModel(
         this.query = query
         this.title = title
         this.folder = folder
+        found = null
         cards = emptyList()
         count = null
         reload(keep = 0)
     }
+
+    /**
+     * A place from the pane, a tile or a chip, with the filters left standing,
+     * as a row of the window's pane keeps them (ADR-0035).
+     */
+    fun go(place: String, title: String, folder: Long? = null) {
+        val standing = facets
+        if (!standing.active) {
+            show(place, title, folder)
+            return
+        }
+        filtering?.cancel()
+        filtering = scope.launch {
+            val joined = runCatching { session.ask(JoinQuery(place, standing), String.serializer()) }.getOrNull()
+            show(joined ?: place, title, folder)
+        }
+    }
+
+    /** The filter bar changed: the same place, these facets. */
+    fun filter(wanted: Facets) {
+        tagRule = wanted.tagRule
+        val place = split?.place ?: query
+        val typed = title == query
+        filtering?.cancel()
+        filtering = scope.launch {
+            try {
+                val joined = session.ask(JoinQuery(place, wanted), String.serializer())
+                show(joined, if (typed) joined.ifEmpty { "All assets" } else title, folder)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed(e)
+            }
+        }
+    }
+
+    /**
+     * What the Tags and Type menus offer over the place given what is ticked,
+     * or `null` for the library's own lists (ADR-0035 §8, §9).
+     */
+    suspend fun vocabulary(ticked: Facets): FacetVocabulary? = runCatching {
+        session.ask(ReadVocabulary(split?.place ?: query, ticked), FacetVocabulary.serializer().nullable)
+    }.getOrNull()
 
     /** The next page, when the grid nears the end of what it holds. */
     fun more() {
@@ -195,6 +290,27 @@ class LibraryModel(
             } catch (e: Exception) {
                 readAt.remove(id)
                 failed(e)
+            }
+        }
+    }
+
+    /** Reads the covers of these folders unless read since the library last changed. */
+    fun wantCovers(folders: List<Long>) {
+        val version = detailVersion
+        val wanted = folders.filter { coversReadAt[it] != version }
+        if (wanted.isEmpty()) return
+        wanted.forEach { coversReadAt[it] = version }
+        scope.launch {
+            try {
+                val read = session.ask(ReadCovers(wanted), ListSerializer(FolderCover.serializer()))
+                for (cover in read) {
+                    covers[cover.folder] = cover.assets.map { session.thumbnail(it.id, it.posterMs, it.derivedAt) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A tile without its pictures still opens its folder.
+                wanted.forEach { coversReadAt.remove(it) }
             }
         }
     }
@@ -370,6 +486,16 @@ class LibraryModel(
                 next = page.next
                 problem = null
                 count = session.ask(CountAssets(query), Long.serializer())
+                val named = if (folder == null && query.isNotBlank()) {
+                    runCatching {
+                        session.ask(FindFolders(query), ListSerializer(Long.serializer()).nullable)
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                if (generation == this@LibraryModel.generation) found = named
+                val parted = runCatching { session.ask(SplitRequest(query), SplitQuery.serializer()) }.getOrNull()
+                if (generation == this@LibraryModel.generation) split = parted
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

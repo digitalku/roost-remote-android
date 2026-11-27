@@ -103,8 +103,50 @@ system**, **Light** or **Dark**, the system's by default. Two things follow from
 
 The viewer is black in both themes.
 
-## 8. Not yet
+## 8. Finding a place
+
+The window's ways of reaching a folder or a tag, drawn for a phone:
+
+- **Folders in the grid** (ADR-0043, ADR-0057): inside a folder its subfolders come first, as tiles
+  of their four newest pictures (`folder:covers`); a typed search draws the folders whose names it
+  finds (`folder:find`), each with the folder it sits in, because names repeat. A tile opens its
+  folder. Its key in the grid is the folder's id, a number, because a lazy list's key has to fit in
+  a `Bundle` and the thumbnails asked for on screen are the string keys alone.
+- **The drawer's search**, behind a magnifier as the window's is (ADR-0033 §6): folders keep the
+  tree's shape, a match with its ancestors, and smart folders and tags are filtered by the same
+  rule, every word typed starting a word of the name. A field as the drawer's first control would
+  take the focus each time the drawer opens, and raise the keyboard with it.
+- **A tag or folder on a file** is a chip with a menu: go to it, in the grid's place, or take it
+  off the file. *Add tag…* and *Add to folder…* open pickers searched the same way; the tag picker
+  stays open for several, and makes a new tag from what is typed when none is called that.
+
+Everything is matched in the app, over the pane's own rows (`ui/Find.kt`), except the grid's
+folders: what a typed query finds is the engine's to say, because the app reads no RQL.
+
+## 9. The filter bar
+
+Tags, Rating and Type, as chips over the grid (ADR-0035), each opening a sheet of what to tick:
+tags found by typing with **Any of them** or **All of them**, the five ratings and unrated, and the
+extensions. The bar is a view of the query, as the window's is. A tick is sent as values, and
+`query:join` writes the query; the chips are read back out of it with `query:split`, so the search
+field shows what the bar did and a query typed there ticks the bar. The app writes no RQL of its
+own. A sheet draws its ticks from a copy it holds, so a tick shows at once rather than after the
+round trip, and its lists are what the place holds (`facets:vocabulary`), read as it opens.
+
+Two of the window's rules come along. A place chosen from the pane, a tile or a chip **keeps the
+filters standing**: its query is joined with them. And the tag rule is remembered by the app below
+two tags, where the query cannot say it (ADR-0035 §7.2). A folder narrowed by the bar draws no
+subfolder tiles (ADR-0043).
+
+## 10. The video transport
+
+`PlayerView`'s own controls sat inside the pager, which took every sideways drag, so the seek bar
+could not be dragged. The transport is drawn in Compose instead, over a `PlayerView` with no
+controller: play and pause, the time, and a `Slider`, which takes its drag before the pager sees
+it. A drag anywhere else on the picture still swipes to the next file, and a tap shows and hides the
+chrome as it does over a picture.
+
+## 11. Not yet
 
 - Deleting for good. When it comes, RR-10's confirmation and preview come with it.
 - Comments, the library's own sort order, sharing a file out of the app.
-- A release build signed for Google Play's internal testing.

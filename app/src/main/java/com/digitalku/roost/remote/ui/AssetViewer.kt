@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Star
@@ -28,12 +30,15 @@ import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -48,7 +53,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -59,6 +66,8 @@ import com.digitalku.roost.remote.net.AssetCard
 import com.digitalku.roost.remote.net.AssetDetail
 import com.digitalku.roost.remote.net.Rate
 import com.digitalku.roost.remote.net.Restore
+import com.digitalku.roost.remote.net.SidebarRow
+import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 
 /**
@@ -66,9 +75,10 @@ import okhttp3.OkHttpClient
  * details and the trash over it. A tap hides and shows what is over it.
  *
  * [onClose] is told the index it closed on, so the grid can bring it into view.
+ * [onGo] opens a tag or a folder chosen in the details, in the grid's place.
  */
 @Composable
-fun AssetViewer(model: LibraryModel, start: Int, onClose: (Int) -> Unit) {
+fun AssetViewer(model: LibraryModel, start: Int, onGo: (SidebarRow) -> Unit, onClose: (Int) -> Unit) {
     val pager = rememberPagerState(initialPage = start) { model.cards.size }
     var chrome by remember { mutableStateOf(true) }
     var info by remember { mutableStateOf(false) }
@@ -98,6 +108,7 @@ fun AssetViewer(model: LibraryModel, start: Int, onClose: (Int) -> Unit) {
                 detail = model.details[shown.id],
                 model = model,
                 current = page == pager.currentPage,
+                chrome = chrome,
                 onTap = { chrome = !chrome },
             )
         }
@@ -151,7 +162,15 @@ fun AssetViewer(model: LibraryModel, start: Int, onClose: (Int) -> Unit) {
     }
 
     if (info && detail != null) {
-        DetailSheet(model, detail, onDismiss = { info = false })
+        DetailSheet(
+            model,
+            detail,
+            onGo = { row ->
+                info = false
+                onGo(row)
+            },
+            onDismiss = { info = false },
+        )
     }
 }
 
@@ -181,12 +200,13 @@ private fun Page(
     detail: AssetDetail?,
     model: LibraryModel,
     current: Boolean,
+    chrome: Boolean,
     onTap: () -> Unit,
 ) {
     val session = model.session
     when {
         (card.kind == "video" || card.kind == "audio") && current && detail != null ->
-            Player(session.file(card.id, detail.contentHash), model.http)
+            MediaPlayer(session.file(card.id, detail.contentHash), model.http, chrome, onTap)
         card.kind == "image" -> Zoomable(onTap) {
             // The thumbnail at once, the file over it as it arrives.
             AsyncImage(
@@ -268,10 +288,18 @@ private fun Zoomable(onTap: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/** The file streamed with `Range` (RR-13), through the one client and its token. */
+/**
+ * The file streamed with `Range` (RR-13), through the one client and its token,
+ * with a transport drawn here rather than `PlayerView`'s.
+ *
+ * `PlayerView`'s own bar is an Android view inside the pager, and the pager took
+ * every sideways drag on it, so the seek bar could not be dragged. A Compose
+ * [Slider] takes its drag before the pager sees it, and a drag anywhere else on
+ * the picture still swipes to the next file.
+ */
 @OptIn(UnstableApi::class)
 @Composable
-private fun Player(url: String, http: OkHttpClient) {
+private fun MediaPlayer(url: String, http: OkHttpClient, chrome: Boolean, onTap: () -> Unit) {
     val context = LocalContext.current
     val player = remember(url) {
         ExoPlayer.Builder(context)
@@ -283,11 +311,80 @@ private fun Player(url: String, http: OkHttpClient) {
                 playWhenReady = true
             }
     }
-    DisposableEffect(player) { onDispose { player.release() } }
-    Column(Modifier.fillMaxSize()) {
+    var playing by remember(player) { mutableStateOf(true) }
+    var position by remember(player) { mutableLongStateOf(0L) }
+    var length by remember(player) { mutableLongStateOf(0L) }
+    var dragged by remember(player) { mutableStateOf<Float?>(null) }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                playing = playWhenReady
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
+    LaunchedEffect(player) {
+        while (true) {
+            position = player.currentPosition
+            length = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+            delay(200)
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { PlayerView(it).apply { this.player = player } },
+            factory = { PlayerView(it).apply { useController = false } },
+            update = { it.player = player },
             modifier = Modifier.fillMaxSize(),
         )
+        // Over the video, so that a tap shows and hides the chrome as it does
+        // over a picture; a drag is not taken, and the pager swipes.
+        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) })
+        if (chrome) {
+            Row(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    // Clear of the stars and the trash under it.
+                    .padding(bottom = 56.dp)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = {
+                    if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+                    player.playWhenReady = !player.playWhenReady
+                }) {
+                    Icon(
+                        if (playing && player.playbackState != Player.STATE_ENDED) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (playing) "Pause" else "Play",
+                        tint = Color.White,
+                    )
+                }
+                val shown = dragged?.toLong() ?: position
+                Text(duration(shown), color = Color.White, style = MaterialTheme.typography.labelMedium)
+                Slider(
+                    value = (dragged ?: position.toFloat()).coerceIn(0f, length.toFloat()),
+                    onValueChange = { dragged = it },
+                    onValueChangeFinished = {
+                        dragged?.let {
+                            player.seekTo(it.toLong())
+                            position = it.toLong()
+                        }
+                        dragged = null
+                    },
+                    valueRange = 0f..length.toFloat().coerceAtLeast(1f),
+                    enabled = length > 0,
+                    colors = SliderDefaults.colors(inactiveTrackColor = Color.White.copy(alpha = 0.3f)),
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
+                Text(duration(length), color = Color.White, style = MaterialTheme.typography.labelMedium)
+            }
+        }
     }
 }
